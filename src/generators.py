@@ -84,3 +84,12 @@ async def generate_companies(batch_size: int, total_contacts: int):
     df.to_csv(f"data/company-data.csv", index=False)
 
     return df['customerId'].to_list()
+
+
+async def generate_company_dataset(batch_size: int, total_companies: int):
+    # Generate the companies and return a list of ids
+    company_list = await generate_companies(batch_size, total_companies)
+
+    # Use the list of ids to create invoices and payments
+    print("We're going to make invoices for each company")
+    print(f"Calling some method that creates invoices - {company_list[:20]}")
