@@ -1,12 +1,14 @@
-import asyncio
-from datetime import date, timedelta
+import math
+
 import json
+import jsonpickle
 import numpy as np
 import pandas as pd
+from datetime import date, timedelta
 from faker import Faker
 from faker.providers import address, internet, person, company, phone_number
+from joblib import Parallel, delayed
 from src.models import Contact, MailAddress, Company, Invoice
-from src.utils import serialize_to_camel
 
 fake = Faker('en_US')
 fake.add_provider(person)
@@ -17,7 +19,7 @@ fake.add_provider(phone_number)
 Faker.seed(42)
 
 
-async def make_contact(contact_id: int, company_name: str) -> Contact:
+def make_contact(contact_id: int, company_name: str) -> Contact:
     """
     Create a Contact with fake information and mailing address that belongs
     to the supplied company id. Generated names are not guaranteed to be unique
@@ -54,7 +56,7 @@ async def make_contact(contact_id: int, company_name: str) -> Contact:
     )
 
 
-async def make_company(company_id: int) -> Company:
+def make_company(company_id: int) -> Company:
     """
     Create a company with the given id number. Sets the default ar account for
     the company and adds a primary contact.
@@ -66,7 +68,7 @@ async def make_company(company_id: int) -> Company:
         A Company with a display contact and completed information.
     """
     company_name = fake.company()
-    contact = await make_contact(company_id, company_name)
+    contact = make_contact(company_id, company_name)
 
     return Company(
         customer_id=f"C{company_id}",
@@ -77,7 +79,7 @@ async def make_company(company_id: int) -> Company:
     )
 
 
-async def make_company_batch(start_id: int = 0, batch_size: int = 10) -> list[Company]:
+def make_company_batch(start_id: int = 0, batch_size: int = 10) -> pd.DataFrame:
     """
     Create a batch of company objects starting at the given id.
 
@@ -92,13 +94,13 @@ async def make_company_batch(start_id: int = 0, batch_size: int = 10) -> list[Co
     Returns:
         A list of Company objects with fabricated data.
     """
-    companies = await asyncio.gather(
-        *[make_company(start_id + i + 1) for i in range(batch_size)]
-    )
-    return companies
+
+    companies = [make_company(start_id + i + 1) for i in range(batch_size)]
+    pickled_stuff = jsonpickle.encode(companies, unpicklable=False)
+    return pd.json_normalize(json.loads(pickled_stuff))
 
 
-async def generate_companies(batch_size: int, total_companies: int) -> list[str]:
+def generate_companies(batch_size: int, total_companies: int) -> list[str]:
     """
     Generates fake company data records and outputs a flattened .csv to the data
     folder. The fake data batch is split into equal sized chunks to generate a
@@ -114,16 +116,16 @@ async def generate_companies(batch_size: int, total_companies: int) -> list[str]
         A list of ids for the generated companies.
     """
     batch_ct = total_companies // batch_size
-    contact_list = await asyncio.gather(
-        *[make_company_batch(i * batch_size, batch_size) for i in range(batch_ct)]
+    item_list = [i * batch_size for i in range(batch_ct)]
+    result_frames = Parallel(n_jobs=8, verbose=10)(
+        delayed(make_company_batch)(i, batch_size)
+        for i in item_list
     )
 
-    contact_list = list(np.concatenate(contact_list).flat)
-    json_contacts = json.dumps(contact_list, indent=4, default=serialize_to_camel)
-    df = pd.json_normalize(json.loads(json_contacts))
-    df.to_csv(f"data/company-data.csv", index=False)
+    df = pd.concat(result_frames)
 
-    return df['customerId'].to_list()
+    df.to_csv(f"data/company-data.csv", index=False)
+    return df['customer_id'].to_list()
 
 
 def get_period_end(start_date: date) -> date:
@@ -235,7 +237,7 @@ async def create_invoice_batch(company_id: str, starting_no: int, count: int,
 async def generate_invoices(period_ranges: list[list[tuple[date, date]]], start_id: int = 0,
                             period_size: int = 20, total_invoices=10000):
     invoice_ids = [i + 1 for i in range(start_id, total_invoices)]
-    # TODO We need to call the period size here and determine chunk size within this block
+
     period_count = sum(map(len, period_ranges))
     chunk_count = math.ceil(total_invoices / period_count)
     invoice_ids = [
@@ -263,10 +265,12 @@ async def generate_company_dataset(batch_size: int, total_companies: int) -> Non
         None
     """
     # Generate the companies and return a list of ids
-    company_list = await generate_companies(batch_size, total_companies)
+    company_list = generate_companies(batch_size, total_companies)
 
     # We're making dates!
     period_ranges = create_date_ranges()
+    # For each period we will generate invoices
+    # we can just call to generate invoice with the company list and total per period to issue
     await generate_invoices(period_ranges)
 
     # TODO Use the list of ids to create invoices
