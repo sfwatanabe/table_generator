@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from faker import Faker
 from faker.providers import address, internet, person, company, phone_number
-from src.models import Contact, MailAddress, Company
+from src.models import Contact, MailAddress, Company, Invoice
 from src.utils import serialize_to_camel
 
 fake = Faker('en_US')
@@ -169,7 +169,7 @@ def create_month_ranges(start_date: date, end_date: date) -> list[tuple[date, da
     return month_ranges
 
 
-def create_date_ranges(years_back: int = 2) -> list[list[tuple[date,date]]]:
+def create_date_ranges(years_back: int = 2) -> list[list[tuple[date, date]]]:
     """
     Generate a list of date range objects that have a start and end date for
     the previous number of years and the current year up to the current date.
@@ -199,6 +199,51 @@ def create_date_ranges(years_back: int = 2) -> list[list[tuple[date,date]]]:
     return month_ranges
 
 
+async def create_invoice(invoice_no: int, company_id: str, invoice_date: date) -> Invoice:
+    """
+    Create an invoice for the given company
+    Args:
+        invoice_no (): The invoice number to use for this invoice.
+        company_id (): The company id to assign this invoice to.
+        invoice_date (): The date to use for the invoice.
+
+    Returns:
+        An invoice for the given company id with the provided date and number.
+    """
+    pass
+
+
+async def create_invoice_batch(company_id: str, starting_no: int, count: int,
+                               start_date: date, end_date: date) -> list[Invoice]:
+    """
+    Create a batch of invoices for the provided company that fall within the
+    start and end dates provided.
+
+    Args:
+        company_id (): The company id to assign these invoices to .
+        starting_no (): The starting invoice number for this batch.
+        count (): The total number of invoices to create for the company.
+        start_date (): The beginning date for the invoice range.
+        end_date (): The ending date for the invoice range.
+
+    Returns:
+        A list of invoices for the company that are between the given date range.
+    """
+    pass
+
+
+async def generate_invoices(period_ranges: list[list[tuple[date, date]]], start_id: int = 0,
+                            period_size: int = 20, total_invoices=10000):
+    invoice_ids = [i + 1 for i in range(start_id, total_invoices)]
+    # TODO We need to call the period size here and determine chunk size within this block
+    period_count = sum(map(len, period_ranges))
+    chunk_count = math.ceil(total_invoices / period_count)
+    invoice_ids = [
+        list(chunk) for chunk in np.array_split(invoice_ids, chunk_count)
+    ]
+    print(invoice_ids)
+
+
 async def generate_company_dataset(batch_size: int, total_companies: int) -> None:
     """
     Generate a company dataset using the given batch size to create a specified
@@ -218,10 +263,11 @@ async def generate_company_dataset(batch_size: int, total_companies: int) -> Non
         None
     """
     # Generate the companies and return a list of ids
-    # company_list = await generate_companies(batch_size, total_companies)
+    company_list = await generate_companies(batch_size, total_companies)
 
     # We're making dates!
     period_ranges = create_date_ranges()
+    await generate_invoices(period_ranges)
 
     # TODO Use the list of ids to create invoices
     print("We're going to make invoices for each company!")
