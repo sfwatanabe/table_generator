@@ -31,3 +31,21 @@ class Invoice:
     term_name: str | None
     po_number: str | None = None
     invoice_items: list[LineItem] | None = None
+
+    @property
+    def total(self) -> float:
+        if self.invoice_items:
+            return sum(map(lambda x: x.amount, self.invoice_items))
+        else:
+            return 0.0
+
+    @property
+    def summary(self) -> dict:
+        return {
+            'invoice_no': self.invoice_no,
+            'customer_id': self.customer_id,
+            'date_created': str(self.date_created),
+            'date_posted': str(self.date_posted),
+            'date_due': str(self.date_due),
+            'total_amount': self.total
+        }
