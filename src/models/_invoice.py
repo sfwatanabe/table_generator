@@ -7,6 +7,8 @@ from dataclasses import dataclass
 class LineItem:
     amount: float
     """The amount of the line item."""
+    invoice_no: str
+    invoice_line: int
     account_label: str
     """The AR account label to post this item against."""
     location_id: str | None = None

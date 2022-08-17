@@ -100,7 +100,20 @@ def make_company_batch(start_id: int = 0, batch_size: int = 10) -> pd.DataFrame:
     return pd.json_normalize(json.loads(pickled_stuff))
 
 
-def generate_companies(batch_size: int, total_companies: int) -> list[str]:
+def write_invoice_period(start_date: date, invoices: list[Invoice]):
+    pickled_stuff = jsonpickle.encode(invoices, unpicklable=False)
+    df = pd.json_normalize(json.loads(pickled_stuff))
+    df.drop(['invoice_items'], axis=1, inplace=True)
+    df['amount'] = [i.total for i in invoices]
+
+    df.to_csv(f"data/invoices/invoices_{start_date.year}_{start_date.month}.csv", index=False)
+
+
+def make_invoice_item_frame(invoice_items: list[LineItem]) -> pd.DataFrame:
+    pass
+
+
+def generate_companies(batch_size: int, total_companies: int) -> list[tuple[str, str]]:
     """
     Generates fake company data records and outputs a flattened .csv to the data
     folder. The fake data batch is split into equal sized chunks to generate a
@@ -122,10 +135,15 @@ def generate_companies(batch_size: int, total_companies: int) -> list[str]:
         for i in item_list
     )
 
+    # Concat the results and dump to a file
     df = pd.concat(result_frames)
-
     df.to_csv(f"data/company-data.csv", index=False)
-    return df['customer_id'].to_list()
+
+    # Do some reshaping to return only what we need
+    company_info = df[['customer_id', 'display_contact.print_as']]
+    company_info.columns = ['company_id', 'contact_name']
+
+    return list(company_info.itertuples(index=False, name='Company'))
 
 
 def get_period_end(start_date: date) -> date:
@@ -203,12 +221,12 @@ def create_date_ranges(years_back: int = 2) -> list[list[tuple[date, date]]]:
     return [month for year in month_ranges for month in year]
 
 
-def create_invoice(company_id: str, invoice_info: tuple[int, float], period: tuple[date, date],
-                   ) -> Invoice:
+def create_invoice(company_info: tuple[str, str], invoice_info: tuple[int, float],
+                   period: tuple[date, date]) -> Invoice:
     """
     Create an invoice for the given company
     Args:
-        company_id (): The company id to assign this invoice to.
+        company_info (): The company info to assign this invoice to.
         invoice_info (): A tuple of the invoice id and amount to bill.
         period (): The date range to use for the invoice.
 
@@ -222,20 +240,22 @@ def create_invoice(company_id: str, invoice_info: tuple[int, float], period: tup
     line_items = [
         LineItem(
             amount=invoice_info[1],
-            account_label="4000"
+            account_label="4000",
+            invoice_no=f"{invoice_info[0]}",
+            invoice_line=1
         )
     ]
 
     return Invoice(
         invoice_no=f"{invoice_info[0]}",
-        customer_id=company_id,
+        customer_id=company_info.company_id,
         date_created=fake_date,
         date_posted=fake_date,
         date_due=fake_date + timedelta(days=30),
         base_curr="USD",
         currency_code="USD",
-        bill_to_contact_name=f"Company {company_id}",
-        ship_to_contact_name=f"Company {company_id}",
+        bill_to_contact_name=f"{company_info.contact_name}",
+        ship_to_contact_name=f"{company_info.contact_name}",
         term_name="N30",
         invoice_items=line_items,
 
@@ -243,7 +263,7 @@ def create_invoice(company_id: str, invoice_info: tuple[int, float], period: tup
 
 
 def create_invoice_batch(period: tuple[date, date], invoice_ids: list[int],
-                         companies: list[str],
+                         companies: list[tuple[str, str]],
                          low: float = 50.00,
                          high: float = 100000) -> list[Invoice]:
     """
@@ -272,33 +292,57 @@ def create_invoice_batch(period: tuple[date, date], invoice_ids: list[int],
     # TODO Create a cycle for the companies
     company_cycle = cycle(companies)
 
-    for c, invoice_pair in zip(company_cycle, invoice_with_amounts):
-        # Process invoices for a single company
-        create_invoice(c, invoice_pair, period)
-        # pass
+    # for c, invoice_pair in zip(company_cycle, invoice_with_amounts):
+    #     # Process invoices for a single company
+    #     create_invoice(c, invoice_pair, period)
+    #     # pass
 
-    return [create_invoice(c, inv, period) for c, inv in zip(companies, invoice_with_amounts)]
+    return [create_invoice(c, inv, period) for c, inv in zip(company_cycle, invoice_with_amounts)]
 
 
-def generate_invoices(periods: list[list[tuple[date, date]]], companies: list[str],
+def generate_invoices(periods: list[list[tuple[date, date]]], companies: list[tuple[str, str]],
                       per_period: int, start_id: int = 0, active_pct: float = .20):
     period_count = len(periods)
     invoice_ids = [i + 1 for i in range(start_id, period_count * per_period)]
 
     # Split the ids into period count
+    company_ct = len(companies)
     invoice_ids = np.array_split(invoice_ids, period_count)
 
-    # Let's random sample the companies for each period
-    company_samples = [
-        list(np.random.choice(companies, size=(int(len(companies) * active_pct))))
+    # Sample some indexes
+    n_samples = (int(company_ct * active_pct))
+
+    # Grab some random indices
+    indices = [
+        np.random.choice(company_ct, n_samples)
         for _ in range(period_count)
     ]
 
+    company_samples = [[companies[idx] for idx in idx_arr] for idx_arr in indices]
+
     # Zip the periods and ids together and start building invoices
-    results = []
-    for period, ids, sample in zip(periods, invoice_ids, company_samples):
-        # TODO Here is where we'll call to Parallel and do the magic
-        results.append(create_invoice_batch(period, ids, sample))
+    # results = []
+    results = Parallel(n_jobs=8, verbose=10)(
+        delayed(create_invoice_batch)(period, ids, sample)
+        for period, ids, sample in zip(periods, invoice_ids, company_samples)
+    )
+
+    # for period, ids, sample in zip(periods, invoice_ids, company_samples):
+    #     # TODO Here is where we'll call to Parallel and do the magic
+    #     results.append(create_invoice_batch(period, ids, sample))
+
+    Parallel(n_jobs=8, verbose=10)(
+        delayed(write_invoice_period)(period[0], i_batch)
+        for period, i_batch in zip(periods, results)
+    )
+
+    # # TODO  This should be moved into the write_invoice_period func
+    # invoice_items = [
+    #     [item for i in invoices for item in i.invoice_items]
+    #     for invoices in results
+    # ]
+
+    print("woo")
 
     return [i.summary for invoices in results for i in invoices]
 
@@ -322,16 +366,11 @@ async def generate_company_dataset(batch_size: int, total_companies: int) -> Non
         None
     """
     # Generate the companies and return a list of ids
-    # company_list = generate_companies(batch_size, total_companies)
+    company_list = generate_companies(batch_size, total_companies)
 
-    # We're making dates!
-    period_ranges = create_date_ranges()
     # For each period we will generate invoices
-    # we can just call to generate invoice with the company list and total per period to issue
-    invoice_ids = generate_invoices(period_ranges, [str(i + 1) for i in range(1000)], 1000)
-
-    # TODO Use the list of ids to create invoices
-    print("We're going to make invoices for each company!")
+    period_ranges = create_date_ranges()
+    invoice_ids = generate_invoices(period_ranges, company_list, 10000)
 
     # TODO Use the list of ids to create payments
     print("We're going to make payments for each company!")
