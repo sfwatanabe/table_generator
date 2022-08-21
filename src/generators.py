@@ -418,7 +418,7 @@ def generate_invoices(periods: list[list[tuple[date, date]]],
 
 async def generate_company_dataset(batch_size: int,
                                    total_companies: int,
-                                   inv_per_period: int = 500) -> None:
+                                   inv_per_period: int = 1_000) -> None:
     """
     Generate a company dataset using the given batch size to create a specified
     number of total companies. The generated datasets will be output to
@@ -440,13 +440,11 @@ async def generate_company_dataset(batch_size: int,
     # Generate the companies and return a list of ids
     company_list = generate_companies(batch_size, total_companies)
 
-    # For each period we will generate invoices
+    # For each period we will generate invoices and payments
     period_ranges = create_date_ranges()
+
+    # Generate and output invoices
     invoice_ids = generate_invoices(period_ranges, company_list, inv_per_period)
 
-    # create_payment_batch(invoice_ids[0],
-    #                      [i + 1 for i in range(len(invoice_ids[0]))],
-    #                      1)
-
-    print("We're going to make payments for each company!")
+    # Generate and output payments
     generate_payments(invoice_ids)
