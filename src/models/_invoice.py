@@ -4,6 +4,16 @@ from dataclasses import dataclass
 
 
 @dataclass
+class InvoiceSummary:
+    invoice_id: str
+    customer_id: str
+    date_created: date
+    date_posted: date
+    date_due: date
+    total_amount: float
+
+
+@dataclass
 class LineItem:
     amount: float
     """The amount of the line item."""
@@ -42,12 +52,12 @@ class Invoice:
             return 0.0
 
     @property
-    def summary(self) -> dict:
-        return {
-            'invoice_id': self.invoice_id,
-            'customer_id': self.customer_id,
-            'date_created': str(self.date_created),
-            'date_posted': str(self.date_posted),
-            'date_due': str(self.date_due),
-            'total_amount': self.total
-        }
+    def summary(self) -> InvoiceSummary:
+        return InvoiceSummary(
+            invoice_id=self.invoice_id,
+            customer_id=self.customer_id,
+            date_created=self.date_created,
+            date_posted=self.date_posted,
+            date_due=self.date_due,
+            total_amount=self.total
+        )
