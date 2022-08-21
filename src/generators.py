@@ -1,3 +1,4 @@
+import os
 from itertools import cycle
 import json
 import jsonpickle
@@ -7,7 +8,8 @@ from datetime import date, timedelta
 from faker import Faker
 from faker.providers import address, internet, person, company, date_time, phone_number
 from joblib import Parallel, delayed
-from src.models import Contact, MailAddress, Company, Invoice, LineItem
+from src.models import Contact, MailAddress, Company, Invoice, LineItem, Payment, PaymentItem
+from src.models import InvoiceSummary
 
 fake = Faker('en_US')
 fake.add_provider(person)
@@ -217,6 +219,48 @@ def create_date_ranges(years_back: int = 2) -> list[list[tuple[date, date]]]:
     return [month for year in month_ranges for month in year]
 
 
+def create_payment(invoice_info: InvoiceSummary, payment_id: int,
+                   multiple_pct: float = .80) -> Payment:
+    # For now we'll just pay in full
+    left_to_pay = invoice_info.total_amount
+    # Pick a random date within the posted and due date
+    date_paid = date_rcv = fake.date_between(invoice_info.date_posted,
+                                             invoice_info.date_due)
+    payment_items = []
+
+    partial_roll = np.random.random_sample()
+    if partial_roll > multiple_pct:
+        # We'll go ahead and make two payments
+        item_payment = round(left_to_pay * partial_roll, 2)
+        left_to_pay -= item_payment
+        payment_items.append(
+            PaymentItem(invoice_info.invoice_id, f'{payment_id}', item_payment,
+                        date_paid, date_paid)
+        )
+    # Add a single payment OR the balance to the original
+    payment_items.append(
+        PaymentItem(invoice_info.invoice_id, f'{payment_id}', round(left_to_pay, 2),
+                    date_paid, date_paid)
+    )
+
+    total_paid = sum(map(lambda x: x.amount, payment_items))
+
+    payment = Payment(
+        payment_id=f'{payment_id}',
+        customer_id=invoice_info.customer_id,
+        payment_amount=invoice_info.total_amount,
+        payment_method='cash',
+        base_curr='USD',
+        currency_code='USD',
+        date_created=date_paid,
+        date_received=date_rcv,
+        date_posted=date_paid,
+        payment_items=payment_items
+    )
+
+    return payment
+
+
 def create_invoice(company_info: tuple[str, str], invoice_info: tuple[int, float],
                    period: tuple[date, date]) -> Invoice:
     """
@@ -371,5 +415,7 @@ async def generate_company_dataset(batch_size: int,
     period_ranges = create_date_ranges()
     invoice_ids = generate_invoices(period_ranges, company_list, inv_per_period)
 
+    payment = create_payment(invoice_ids[0], 111)
+    print(os.getcwd())
     # TODO Use the list of ids to create payments
     print("We're going to make payments for each company!")
