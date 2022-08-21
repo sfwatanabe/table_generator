@@ -7,7 +7,7 @@ from dataclasses import dataclass
 class LineItem:
     amount: float
     """The amount of the line item."""
-    invoice_no: str
+    invoice_id: str
     invoice_line: int
     account_label: str
     """The AR account label to post this item against."""
@@ -20,7 +20,7 @@ class LineItem:
 
 @dataclass
 class Invoice:
-    invoice_no: str
+    invoice_id: str
     customer_id: str
     """Customer id must match with a customer from the generated dataset"""
     date_created: date
@@ -44,7 +44,7 @@ class Invoice:
     @property
     def summary(self) -> dict:
         return {
-            'invoice_no': self.invoice_no,
+            'invoice_id': self.invoice_id,
             'customer_id': self.customer_id,
             'date_created': str(self.date_created),
             'date_posted': str(self.date_posted),

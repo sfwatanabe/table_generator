@@ -109,10 +109,6 @@ def write_invoice_period(start_date: date, invoices: list[Invoice]):
     df.to_csv(f"data/invoices/invoices_{start_date.year}_{start_date.month}.csv", index=False)
 
 
-def make_invoice_item_frame(invoice_items: list[LineItem]) -> pd.DataFrame:
-    pass
-
-
 def generate_companies(batch_size: int, total_companies: int) -> list[tuple[str, str]]:
     """
     Generates fake company data records and outputs a flattened .csv to the data
@@ -241,13 +237,13 @@ def create_invoice(company_info: tuple[str, str], invoice_info: tuple[int, float
         LineItem(
             amount=invoice_info[1],
             account_label="4000",
-            invoice_no=f"{invoice_info[0]}",
+            invoice_id=f"{invoice_info[0]}",
             invoice_line=1
         )
     ]
 
     return Invoice(
-        invoice_no=f"{invoice_info[0]}",
+        invoice_id=f"{invoice_info[0]}",
         customer_id=company_info.company_id,
         date_created=fake_date,
         date_posted=fake_date,
@@ -347,7 +343,9 @@ def generate_invoices(periods: list[list[tuple[date, date]]], companies: list[tu
     return [i.summary for invoices in results for i in invoices]
 
 
-async def generate_company_dataset(batch_size: int, total_companies: int) -> None:
+async def generate_company_dataset(batch_size: int,
+                                   total_companies: int,
+                                   inv_per_period: int = 500) -> None:
     """
     Generate a company dataset using the given batch size to create a specified
     number of total companies. The generated datasets will be output to
@@ -359,8 +357,9 @@ async def generate_company_dataset(batch_size: int, total_companies: int) -> Non
     * payment-data
 
     Args:
-        batch_size (): The size of each batch when generating the datasets
-        total_companies (): The total number of companies to generate data for.
+        batch_size (int): The size of each batch when generating the datasets
+        total_companies (int): The total number of companies to generate
+        inv_per_period (int): The number of invoices to generate for each period
 
     Returns:
         None
@@ -370,9 +369,7 @@ async def generate_company_dataset(batch_size: int, total_companies: int) -> Non
 
     # For each period we will generate invoices
     period_ranges = create_date_ranges()
-    invoice_ids = generate_invoices(period_ranges, company_list, 10000)
+    invoice_ids = generate_invoices(period_ranges, company_list, inv_per_period)
 
     # TODO Use the list of ids to create payments
     print("We're going to make payments for each company!")
-
-    # print(f"Calling some method that creates invoices - {company_list[:20]}")
