@@ -10,6 +10,7 @@ from faker.providers import address, internet, person, company, date_time, phone
 from joblib import Parallel, delayed
 from src.models import Contact, MailAddress, Company, Invoice, LineItem, Payment, PaymentItem
 from src.models import InvoiceSummary
+from src.utils import serialize_payment
 
 fake = Faker('en_US')
 fake.add_provider(person)
@@ -103,8 +104,8 @@ def make_company_batch(start_id: int = 0, batch_size: int = 10) -> pd.DataFrame:
 
 
 def write_invoice_period(start_date: date, invoices: list[Invoice]):
-    pickled_stuff = jsonpickle.encode(invoices, unpicklable=False)
-    df = pd.json_normalize(json.loads(pickled_stuff))
+    pickled_invoices = jsonpickle.encode(invoices, unpicklable=False)
+    df = pd.json_normalize(json.loads(pickled_invoices))
     df.drop(['invoice_items'], axis=1, inplace=True)
     df['amount'] = [i.total for i in invoices]
 
@@ -215,7 +216,6 @@ def create_date_ranges(years_back: int = 2) -> list[list[tuple[date, date]]]:
     for start, end in date_ranges:
         month_ranges.append(create_month_ranges(start, end))
 
-    # return month_ranges
     return [month for year in month_ranges for month in year]
 
 
@@ -228,9 +228,10 @@ def create_payment(invoice_info: InvoiceSummary, payment_id: int,
                                              invoice_info.date_due)
     payment_items = []
 
+    # Decide if we make multiple payments
     partial_roll = np.random.random_sample()
     if partial_roll > multiple_pct:
-        # We'll go ahead and make two payments
+        fraction = (.60 - .20) * np.random.random_sample() + 0.20
         item_payment = round(left_to_pay * partial_roll, 2)
         left_to_pay -= item_payment
         payment_items.append(
@@ -242,8 +243,6 @@ def create_payment(invoice_info: InvoiceSummary, payment_id: int,
         PaymentItem(invoice_info.invoice_id, f'{payment_id}', round(left_to_pay, 2),
                     date_paid, date_paid)
     )
-
-    total_paid = sum(map(lambda x: x.amount, payment_items))
 
     payment = Payment(
         payment_id=f'{payment_id}',
@@ -259,6 +258,52 @@ def create_payment(invoice_info: InvoiceSummary, payment_id: int,
     )
 
     return payment
+
+
+def create_payment_batch(invoices: list[InvoiceSummary], payment_ids: list[int],
+                         batch_id: int):
+    if len(invoices) != len(payment_ids):
+        raise ValueError("Must supply the same number of invoices and payment ids")
+
+    payment_batch = [
+        create_payment(i, p_id) for i, p_id in zip(invoices, payment_ids)
+    ]
+    print("woo let's write these to disk")
+
+    if not os.path.exists('data/payments'):
+        os.makedirs('data/payments')
+
+    write_payment_batch(batch_id, payment_batch)
+    print(f"Payment batch {batch_id} written to data/payments")
+
+
+def write_payment_batch(batch_id: int, payments: list[Payment]):
+    pickled_payments = [i for p in payments for i in serialize_payment(p)]
+    pickled_payments = json.dumps(pickled_payments)
+
+    df = pd.json_normalize(json.loads(pickled_payments))
+    df['total_remaining'] = 0
+
+    # TODO Add different serializer for exploding the payment items
+    print(f"Payments batch {batch_id} writing to disk")
+    df.to_csv(f"data/payments/payments_batch_{batch_id}", index=False)
+
+
+def generate_payments(invoice_sums: list[list[InvoiceSummary]]):
+    # We need some ids! -> 1 for each invoice in the list
+    invoice_count = sum(map(len, invoice_sums))
+    batches = len(invoice_sums)
+    payment_ids = [i + 1 for i in range(invoice_count)]
+    payment_ids = np.array_split(payment_ids, batches)
+
+    # Note: We can't pass an iterator to Parallel, it must be an object
+    batch_ids = [i + 1 for i in range(batches)]
+
+    Parallel(n_jobs=8, verbose=10)(
+        delayed(create_payment_batch)(invoices, ids, batch)
+        for batch, invoices, ids
+        in zip(batch_ids, invoice_sums, payment_ids)
+    )
 
 
 def create_invoice(company_info: tuple[str, str], invoice_info: tuple[int, float],
@@ -327,21 +372,18 @@ def create_invoice_batch(period: tuple[date, date], invoice_ids: list[int],
     amounts = [round(amt, 2) for amt in amounts]
     # Zip up the amounts with the invoices
     invoice_with_amounts = list(zip(invoice_ids, amounts))
-    # invoice_with_amounts = np.array_split(invoice_with_amounts, len(companies))
-
-    # TODO Create a cycle for the companies
     company_cycle = cycle(companies)
 
-    # for c, invoice_pair in zip(company_cycle, invoice_with_amounts):
-    #     # Process invoices for a single company
-    #     create_invoice(c, invoice_pair, period)
-    #     # pass
-
-    return [create_invoice(c, inv, period) for c, inv in zip(company_cycle, invoice_with_amounts)]
+    return [
+        create_invoice(c, inv, period)
+        for c, inv in zip(company_cycle, invoice_with_amounts)
+    ]
 
 
-def generate_invoices(periods: list[list[tuple[date, date]]], companies: list[tuple[str, str]],
-                      per_period: int, start_id: int = 0, active_pct: float = .20):
+def generate_invoices(periods: list[list[tuple[date, date]]],
+                      companies: list[tuple[str, str]],
+                      per_period: int, start_id: int = 0,
+                      active_pct: float = .20) -> list[list[InvoiceSummary]]:
     period_count = len(periods)
     invoice_ids = [i + 1 for i in range(start_id, period_count * per_period)]
 
@@ -361,30 +403,17 @@ def generate_invoices(periods: list[list[tuple[date, date]]], companies: list[tu
     company_samples = [[companies[idx] for idx in idx_arr] for idx_arr in indices]
 
     # Zip the periods and ids together and start building invoices
-    # results = []
     results = Parallel(n_jobs=8, verbose=10)(
         delayed(create_invoice_batch)(period, ids, sample)
         for period, ids, sample in zip(periods, invoice_ids, company_samples)
     )
-
-    # for period, ids, sample in zip(periods, invoice_ids, company_samples):
-    #     # TODO Here is where we'll call to Parallel and do the magic
-    #     results.append(create_invoice_batch(period, ids, sample))
 
     Parallel(n_jobs=8, verbose=10)(
         delayed(write_invoice_period)(period[0], i_batch)
         for period, i_batch in zip(periods, results)
     )
 
-    # # TODO  This should be moved into the write_invoice_period func
-    # invoice_items = [
-    #     [item for i in invoices for item in i.invoice_items]
-    #     for invoices in results
-    # ]
-
-    print("woo")
-
-    return [i.summary for invoices in results for i in invoices]
+    return [[i.summary for i in invoices] for invoices in results]
 
 
 async def generate_company_dataset(batch_size: int,
@@ -415,7 +444,9 @@ async def generate_company_dataset(batch_size: int,
     period_ranges = create_date_ranges()
     invoice_ids = generate_invoices(period_ranges, company_list, inv_per_period)
 
-    payment = create_payment(invoice_ids[0], 111)
-    print(os.getcwd())
-    # TODO Use the list of ids to create payments
+    # create_payment_batch(invoice_ids[0],
+    #                      [i + 1 for i in range(len(invoice_ids[0]))],
+    #                      1)
+
     print("We're going to make payments for each company!")
+    generate_payments(invoice_ids)

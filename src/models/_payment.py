@@ -42,17 +42,16 @@ class Payment:
         if not self.payment_items:
             return 0
         item_totals = sum(map(lambda x: x.amount, self.payment_items))
-
         return self.payment_amount - item_totals
 
     @property
     def summary(self) -> dict:
         return {
-            'payment_id': self.payment_id,
-            'customer_id': self.customer_id,
-            'payment_amount': self.payment_amount,
-            'total_remaining': self.total_remaining,
-            'date_created': self.date_created,
-            'date_received': self.date_received,
-            'date_posted': self.date_posted
+            "payment_id": self.payment_id,
+            "customer_id": self.customer_id,
+            "payment_amount": self.payment_amount,
+            "total_remaining": self.total_remaining,
+            "date_created": str(self.date_created),
+            "date_received": str(self.date_received),
+            "date_posted": str(self.date_posted)
         }
