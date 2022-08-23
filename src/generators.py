@@ -25,7 +25,7 @@ Faker.seed(42)
 def make_contact(contact_id: int, company_name: str) -> Contact:
     """
     Create a Contact with fake information and mailing address that belongs
-    to the supplied company id. Generated names are not guaranteed to be unique
+    to the supplied company id. Generated names are not guaranteed to be unique,
     so we append the current contact id to the appropriate fields. Uniqueness
     constraints are avoided as an optimization for the run time of dataset
     generation.
@@ -86,8 +86,6 @@ def make_company_batch(start_id: int = 0, batch_size: int = 10) -> pd.DataFrame:
     """
     Create a batch of company objects starting at the given id.
 
-    Processing is done using asyncio.gather to improve performance times.
-
     Args:
         start_id (): The starting id at which to begin incrementing. The starting
             id will not be in the current list as the ids will be indexed
@@ -108,11 +106,14 @@ def write_invoice_period(start_date: date, invoices: list[Invoice]):
     df = pd.json_normalize(json.loads(pickled_invoices))
     df.drop(['invoice_items'], axis=1, inplace=True)
     df['amount'] = [i.total for i in invoices]
+    if not os.path.exists('data/invoices'):
+        os.makedirs('data/invoices')
 
     df.to_csv(f"data/invoices/invoices_{start_date.year}_{start_date.month}.csv", index=False)
 
 
-def generate_companies(batch_size: int, total_companies: int) -> list[tuple[str, str]]:
+def generate_companies(parallel: Parallel, batch_size: int,
+                       total_companies: int) -> list[tuple[str, str]]:
     """
     Generates fake company data records and outputs a flattened .csv to the data
     folder. The fake data batch is split into equal sized chunks to generate a
@@ -121,6 +122,7 @@ def generate_companies(batch_size: int, total_companies: int) -> list[tuple[str,
     be processed.
 
     Args:
+        parallel (Parallel): An instance of `joblib` Parallel
         batch_size (): The size of each batch to process when creating dataset.
         total_companies (): The total number of company records to create.
 
@@ -129,13 +131,17 @@ def generate_companies(batch_size: int, total_companies: int) -> list[tuple[str,
     """
     batch_ct = total_companies // batch_size
     item_list = [i * batch_size for i in range(batch_ct)]
-    result_frames = Parallel(n_jobs=8, verbose=10)(
+
+    result_frames = parallel(
         delayed(make_company_batch)(i, batch_size)
         for i in item_list
     )
 
     # Concat the results and dump to a file
     df = pd.concat(result_frames)
+    if not os.path.exists('data'):
+        os.makedirs('data')
+
     df.to_csv(f"data/company-data.csv", index=False)
 
     # Do some reshaping to return only what we need
@@ -221,7 +227,7 @@ def create_date_ranges(years_back: int = 2) -> list[list[tuple[date, date]]]:
 
 def create_payment(invoice_info: InvoiceSummary, payment_id: int,
                    multiple_pct: float = .80) -> Payment:
-    # For now we'll just pay in full
+    # For now, just pay in full
     left_to_pay = invoice_info.total_amount
     # Pick a random date within the posted and due date
     date_paid = date_rcv = fake.date_between(invoice_info.date_posted,
@@ -268,13 +274,11 @@ def create_payment_batch(invoices: list[InvoiceSummary], payment_ids: list[int],
     payment_batch = [
         create_payment(i, p_id) for i, p_id in zip(invoices, payment_ids)
     ]
-    print("woo let's write these to disk")
 
     if not os.path.exists('data/payments'):
         os.makedirs('data/payments')
 
     write_payment_batch(batch_id, payment_batch)
-    print(f"Payment batch {batch_id} written to data/payments")
 
 
 def write_payment_batch(batch_id: int, payments: list[Payment]):
@@ -284,12 +288,10 @@ def write_payment_batch(batch_id: int, payments: list[Payment]):
     df = pd.json_normalize(json.loads(pickled_payments))
     df['total_remaining'] = 0
 
-    # TODO Add different serializer for exploding the payment items
-    print(f"Payments batch {batch_id} writing to disk")
     df.to_csv(f"data/payments/payments_batch_{batch_id}", index=False)
 
 
-def generate_payments(invoice_sums: list[list[InvoiceSummary]]):
+def generate_payments(parallel: Parallel, invoice_sums: list[list[InvoiceSummary]]):
     # We need some ids! -> 1 for each invoice in the list
     invoice_count = sum(map(len, invoice_sums))
     batches = len(invoice_sums)
@@ -299,7 +301,7 @@ def generate_payments(invoice_sums: list[list[InvoiceSummary]]):
     # Note: We can't pass an iterator to Parallel, it must be an object
     batch_ids = [i + 1 for i in range(batches)]
 
-    Parallel(n_jobs=8, verbose=10)(
+    parallel(
         delayed(create_payment_batch)(invoices, ids, batch)
         for batch, invoices, ids
         in zip(batch_ids, invoice_sums, payment_ids)
@@ -380,7 +382,8 @@ def create_invoice_batch(period: tuple[date, date], invoice_ids: list[int],
     ]
 
 
-def generate_invoices(periods: list[list[tuple[date, date]]],
+def generate_invoices(parallel: Parallel,
+                      periods: list[list[tuple[date, date]]],
                       companies: list[tuple[str, str]],
                       per_period: int, start_id: int = 0,
                       active_pct: float = .20) -> list[list[InvoiceSummary]]:
@@ -403,12 +406,12 @@ def generate_invoices(periods: list[list[tuple[date, date]]],
     company_samples = [[companies[idx] for idx in idx_arr] for idx_arr in indices]
 
     # Zip the periods and ids together and start building invoices
-    results = Parallel(n_jobs=8, verbose=10)(
+    results = parallel(
         delayed(create_invoice_batch)(period, ids, sample)
         for period, ids, sample in zip(periods, invoice_ids, company_samples)
     )
 
-    Parallel(n_jobs=8, verbose=10)(
+    parallel(
         delayed(write_invoice_period)(period[0], i_batch)
         for period, i_batch in zip(periods, results)
     )
@@ -416,35 +419,41 @@ def generate_invoices(periods: list[list[tuple[date, date]]],
     return [[i.summary for i in invoices] for invoices in results]
 
 
-async def generate_company_dataset(batch_size: int,
-                                   total_companies: int,
-                                   inv_per_period: int = 1_000) -> None:
-    """
-    Generate a company dataset using the given batch size to create a specified
-    number of total companies. The generated datasets will be output to
-    `{project-root}/data/` in .csv format. The following dataset files will be
-    created during this process
+class ErpDataGenerator:
 
-    * company-data
-    * invoice-data
-    * payment-data
+    @staticmethod
+    async def generate_company_dataset(parallel: Parallel,
+                                       batch_size: int,
+                                       total_companies: int,
+                                       inv_per_period: int) -> None:
+        """
+        Generate a company dataset using the given batch size to create a specified
+        number of total companies. The generated datasets will be output to
+        `{project-root}/data/` in .csv format. The following dataset files will be
+        created during this process
 
-    Args:
-        batch_size (int): The size of each batch when generating the datasets
-        total_companies (int): The total number of companies to generate
-        inv_per_period (int): The number of invoices to generate for each period
+        * company-data
+        * invoice-data
+        * payment-data
 
-    Returns:
-        None
-    """
-    # Generate the companies and return a list of ids
-    company_list = generate_companies(batch_size, total_companies)
+        Args:
+            parallel (Parallel): An instance of `joblib` Parallel
+            batch_size (int): The size of each batch when generating the datasets
+            total_companies (int): The total number of companies to generate
+            inv_per_period (int): The number of invoices to generate for each period
 
-    # For each period we will generate invoices and payments
-    period_ranges = create_date_ranges()
+        Returns:
+            None
+        """
+        # Generate the companies and return a list of ids
+        company_list = generate_companies(parallel, batch_size, total_companies)
 
-    # Generate and output invoices
-    invoice_ids = generate_invoices(period_ranges, company_list, inv_per_period)
+        # For each period we will generate invoices and payments
+        period_ranges = create_date_ranges()
 
-    # Generate and output payments
-    generate_payments(invoice_ids)
+        # Generate and output invoices
+        invoice_ids = generate_invoices(parallel, period_ranges, company_list,
+                                        inv_per_period)
+
+        # Generate and output payments
+        generate_payments(parallel, invoice_ids)
