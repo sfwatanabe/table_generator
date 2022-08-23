@@ -1,15 +1,26 @@
 from time import perf_counter
 
 import asyncio
-from src.generators import generate_company_dataset
+from joblib import Parallel
+from src.generators import ErpDataGenerator
 
-COMPANY_BATCH_SIZE = 1000
 
+async def main(
+        batch_size: int = 1_000,
+        companies: int = 1_000,
+        inv_per_period: int = 1_000,
+        n_jobs: int = 8
+):
 
-async def main(num_companies: int = 1_000):
     start = perf_counter()
-    # TODO Set optional parameters for batch size, total companies, n-jobs
-    await generate_company_dataset(COMPANY_BATCH_SIZE, num_companies)
+
+    await ErpDataGenerator.generate_company_dataset(
+        Parallel(n_jobs=n_jobs, verbose=10),
+        batch_size,
+        companies,
+        inv_per_period
+    )
+
     end = perf_counter() - start
     print(f"Total time: {end:.3f}")
 
